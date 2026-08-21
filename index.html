@@ -159,7 +159,7 @@ async function dbCrearPedido(sucursal, creadoPor, productosRows) {
   if (errProd) throw errProd;
   return pedido;
 }
-async function dbConfirmarEntrega(pedidoId, items, entregadoPor, recibidoPor) {
+async function dbGuardarSurtido(pedidoId, items, entregadoPor) {
   for (const it of items) {
     const {
       error
@@ -173,8 +173,25 @@ async function dbConfirmarEntrega(pedidoId, items, entregadoPor, recibidoPor) {
   const {
     error: errPedido
   } = await db.from('pedidos').update({
+    estado: 'por_confirmar',
+    entregado_por: entregadoPor
+  }).eq('id', pedidoId);
+  if (errPedido) throw errPedido;
+}
+async function dbConfirmarRecepcion(pedidoId, items, recibidoPor) {
+  for (const it of items) {
+    const {
+      error
+    } = await db.from('pedido_productos').update({
+      recibido: it.recibido,
+      cantidad_recibida: it.cantidad_recibida
+    }).eq('id', it.id);
+    if (error) throw error;
+  }
+  const {
+    error: errPedido
+  } = await db.from('pedidos').update({
     estado: 'entregado',
-    entregado_por: entregadoPor,
     recibido_por: recibidoPor,
     fecha_entrega: new Date().toISOString()
   }).eq('id', pedidoId);
@@ -514,12 +531,28 @@ function exportarExcelCompras(pedidos, catalogo) {
   const fecha = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(wb, `lista-compras-${fecha}.xlsx`);
 }
+function hayDiferencia(pedido) {
+  if (pedido.estado !== 'entregado') return false;
+  return pedido.productos.some(p => {
+    const ce = !!p.entregado;
+    const cn = Number(p.cantidad_entregada ?? 0);
+    const re = !!p.recibido;
+    const rn = Number(p.cantidad_recibida ?? 0);
+    return ce !== re || cn !== rn;
+  });
+}
 const ESTADO_META = {
   pendiente: {
     label: 'Pendiente',
     color: C.pendiente,
     bg: C.pendienteSoft,
     Icon: Clock
+  },
+  por_confirmar: {
+    label: 'Por confirmar',
+    color: C.especial,
+    bg: C.especialSoft,
+    Icon: AlertCircle
   },
   completo: {
     label: 'Entregado',
@@ -1636,68 +1669,75 @@ function DetallePedido({
 }) {
   const estado = estadoDe(pedido);
   const entregado = pedido.estado === 'entregado';
+  const porConfirmar = pedido.estado === 'por_confirmar';
+  const diferencia = hayDiferencia(pedido);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: pedido.sucursal,
     subtitle: `${formatFecha(pedido.fecha_creacion)}${pedido.creado_por ? ' · ' + pedido.creado_por : ''}`,
     onBack: onBack
   }), /*#__PURE__*/React.createElement("div", {
-    className: "mb-4"
+    className: "mb-4 flex items-center gap-2 flex-wrap"
   }, /*#__PURE__*/React.createElement(Pill, {
     estado: estado
-  })), /*#__PURE__*/React.createElement("div", {
+  }), diferencia && /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold",
+    style: {
+      background: C.parcialSoft,
+      color: C.parcial
+    }
+  }, /*#__PURE__*/React.createElement(AlertCircle, {
+    size: 13
+  }), " Diferencia entre compras y sucursal")), /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl border overflow-hidden mb-4",
     style: {
       borderColor: C.border,
       background: C.surface
     }
-  }, pedido.productos.map((p, i) => /*#__PURE__*/React.createElement("div", {
-    key: p.id,
-    className: "flex items-center justify-between px-3.5 py-3 text-sm",
-    style: {
-      borderTop: i > 0 ? `1px solid ${C.border}` : 'none'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "min-w-0"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-1.5 flex-wrap"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "font-medium truncate",
-    style: {
-      color: C.ink
-    }
-  }, p.nombre), p.tipo === 'especial' && /*#__PURE__*/React.createElement(EspecialTag, null)), p.cliente && /*#__PURE__*/React.createElement("p", {
-    className: "text-xs mt-0.5",
-    style: {
-      color: C.especial
-    }
-  }, "Para: ", p.cliente), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs mt-0.5",
-    style: {
-      color: C.inkMuted
-    }
-  }, "Pedido: ", p.cantidad, " ", p.unidad, entregado && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: Number(p.cantidad_entregada) >= Number(p.cantidad) && p.entregado ? C.completo : C.parcial,
-      fontWeight: 600
-    }
-  }, "Entregado: ", p.entregado ? `${p.cantidad_entregada} ${p.unidad}` : '0'))), p.nota && /*#__PURE__*/React.createElement("p", {
-    className: "text-xs italic mt-0.5",
-    style: {
-      color: C.inkFaint
-    }
-  }, "Nota: ", p.nota)), entregado && (p.entregado && Number(p.cantidad_entregada) >= Number(p.cantidad) ? /*#__PURE__*/React.createElement(CheckCircle2, {
-    size: 18,
-    style: {
-      color: C.completo
-    },
-    className: "shrink-0 ml-2"
-  }) : /*#__PURE__*/React.createElement(AlertCircle, {
-    size: 18,
-    style: {
-      color: C.parcial
-    },
-    className: "shrink-0 ml-2"
-  }))))), entregado && /*#__PURE__*/React.createElement("div", {
+  }, pedido.productos.map((p, i) => {
+    const compraOk = p.entregado && Number(p.cantidad_entregada) >= Number(p.cantidad);
+    const recepOk = p.recibido && Number(p.cantidad_recibida) >= Number(p.cantidad);
+    return /*#__PURE__*/React.createElement("div", {
+      key: p.id,
+      className: "px-3.5 py-3 text-sm",
+      style: {
+        borderTop: i > 0 ? `1px solid ${C.border}` : 'none'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5 flex-wrap"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "font-medium truncate",
+      style: {
+        color: C.ink
+      }
+    }, p.nombre), p.tipo === 'especial' && /*#__PURE__*/React.createElement(EspecialTag, null)), p.cliente && /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mt-0.5",
+      style: {
+        color: C.especial
+      }
+    }, "Para: ", p.cliente), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mt-0.5",
+      style: {
+        color: C.inkMuted
+      }
+    }, "Pedido: ", p.cantidad, " ", p.unidad), (porConfirmar || entregado) && /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mt-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: compraOk ? C.completo : C.parcial,
+        fontWeight: 600
+      }
+    }, "Compras: ", p.entregado ? `${p.cantidad_entregada} ${p.unidad}` : 'no llegó'), entregado && /*#__PURE__*/React.createElement(React.Fragment, null, " · ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: recepOk ? C.completo : C.parcial,
+        fontWeight: 600
+      }
+    }, "Sucursal: ", p.recibido ? `${p.cantidad_recibida} ${p.unidad}` : 'no recibió'))), p.nota && /*#__PURE__*/React.createElement("p", {
+      className: "text-xs italic mt-0.5",
+      style: {
+        color: C.inkFaint
+      }
+    }, "Nota de compras: ", p.nota));
+  })), (porConfirmar || entregado) && /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl border p-4 mb-4",
     style: {
       borderColor: C.border,
@@ -1708,7 +1748,7 @@ function DetallePedido({
     style: {
       color: C.inkFaint
     }
-  }, "Firmas de entrega"), /*#__PURE__*/React.createElement("div", {
+  }, "Firmas"), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between gap-4 mb-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1"
@@ -1736,7 +1776,7 @@ function DetallePedido({
       color: C.ink,
       borderColor: C.border
     }
-  }, pedido.recibido_por || '—'))), /*#__PURE__*/React.createElement("p", {
+  }, pedido.recibido_por || (porConfirmar ? 'Esperando confirmación…' : '—')))), entregado && /*#__PURE__*/React.createElement("p", {
     className: "text-xs",
     style: {
       color: C.inkFaint
@@ -1757,7 +1797,15 @@ function VistaSucursal({
   onOpen,
   refreshing
 }) {
-  const mios = useMemo(() => pedidos.filter(p => p.sucursal === sucursal).sort((a, b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)), [pedidos, sucursal]);
+  const mios = useMemo(() => {
+    const propios = pedidos.filter(p => p.sucursal === sucursal);
+    return propios.sort((a, b) => {
+      const aPend = a.estado === 'por_confirmar' ? 0 : 1;
+      const bPend = b.estado === 'por_confirmar' ? 0 : 1;
+      if (aPend !== bPend) return aPend - bPend;
+      return new Date(b.fecha_creacion) - new Date(a.fecha_creacion);
+    });
+  }, [pedidos, sucursal]);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
     onClick: onNuevo,
     className: "w-full flex items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-sm text-white mb-5",
@@ -1812,7 +1860,12 @@ function VistaSucursal({
       style: {
         color: C.inkMuted
       }
-    }, formatFecha(p.fecha_creacion), p.creado_por ? ` · ${p.creado_por}` : '')), /*#__PURE__*/React.createElement("div", {
+    }, formatFecha(p.fecha_creacion), p.creado_por ? ` · ${p.creado_por}` : ''), p.estado === 'por_confirmar' && /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mt-0.5 font-semibold",
+      style: {
+        color: C.especial
+      }
+    }, "Toca para confirmar lo que llegó")), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1.5 shrink-0"
     }, /*#__PURE__*/React.createElement(Pill, {
       estado: estado
@@ -1882,11 +1935,11 @@ function VistaComprasCola({
     }));
   })));
 }
-function VistaEntrega({
+function VistaSurtir({
   pedido,
   role,
   onBack,
-  onConfirmar,
+  onGuardar,
   saving
 }) {
   const [items, setItems] = useState(() => pedido.productos.map(p => ({
@@ -1895,27 +1948,6 @@ function VistaEntrega({
     cantidad_entregada: p.cantidad_entregada ?? p.cantidad,
     nota: p.nota ?? ''
   })));
-  const [codigoRecibe, setCodigoRecibe] = useState('');
-  const [empleadoRecibe, setEmpleadoRecibe] = useState(null);
-  const [verificando, setVerificando] = useState(false);
-  useEffect(() => {
-    const val = codigoRecibe.trim();
-    if (!val) {
-      setEmpleadoRecibe(null);
-      return;
-    }
-    setVerificando(true);
-    const t = setTimeout(async () => {
-      try {
-        setEmpleadoRecibe(await validarCodigoEmpleado(val, 'sucursal', pedido.sucursal));
-      } catch {
-        setEmpleadoRecibe(null);
-      } finally {
-        setVerificando(false);
-      }
-    }, 400);
-    return () => clearTimeout(t);
-  }, [codigoRecibe, pedido.sucursal]);
   const setEntregadoItem = (id, val) => setItems(its => its.map(it => it.id === id ? {
     ...it,
     entregado: val
@@ -1928,13 +1960,17 @@ function VistaEntrega({
     ...it,
     nota: val
   } : it));
-  const canConfirm = !!empleadoRecibe && !saving;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: `Surtir · ${pedido.sucursal}`,
     subtitle: formatFecha(pedido.fecha_creacion),
     onBack: onBack
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "rounded-xl border overflow-hidden mb-4",
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-4",
+    style: {
+      color: C.inkMuted
+    }
+  }, "Marca lo que llevas de cada producto. La sucursal va a hacer su propio checklist al recibir."), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl border overflow-hidden mb-5",
     style: {
       borderColor: C.border,
       background: C.surface
@@ -1970,8 +2006,6 @@ function VistaEntrega({
     value: it.entregado,
     onChange: v => setEntregadoItem(it.id, v)
   })), /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 min-w-0"
-  }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
   }, /*#__PURE__*/React.createElement("input", {
     type: "number",
@@ -1993,62 +2027,161 @@ function VistaEntrega({
       borderColor: C.border,
       color: C.ink
     }
-  })))))), /*#__PURE__*/React.createElement("div", {
+  }))))), /*#__PURE__*/React.createElement("button", {
+    disabled: saving,
+    onClick: () => onGuardar(items, role.nombre),
+    className: "w-full py-3 rounded-xl font-semibold text-sm text-white disabled:opacity-40",
+    style: {
+      background: C.accent
+    }
+  }, saving ? 'Guardando…' : 'Guardar y continuar'));
+}
+function VistaConfirmarRecepcion({
+  pedido,
+  onBack,
+  onConfirmar,
+  saving
+}) {
+  const [items, setItems] = useState(() => pedido.productos.map(p => ({
+    ...p,
+    recibido: p.entregado ?? true,
+    cantidad_recibida: p.cantidad_entregada ?? p.cantidad
+  })));
+  const [codigo, setCodigo] = useState('');
+  const [empleado, setEmpleado] = useState(null);
+  const [verificando, setVerificando] = useState(false);
+  useEffect(() => {
+    const val = codigo.trim();
+    if (!val) {
+      setEmpleado(null);
+      return;
+    }
+    setVerificando(true);
+    const t = setTimeout(async () => {
+      try {
+        setEmpleado(await validarCodigoEmpleado(val, 'sucursal', pedido.sucursal));
+      } catch {
+        setEmpleado(null);
+      } finally {
+        setVerificando(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [codigo, pedido.sucursal]);
+  const setRecibidoItem = (id, val) => setItems(its => its.map(it => it.id === id ? {
+    ...it,
+    recibido: val
+  } : it));
+  const setCantidad = (id, val) => setItems(its => its.map(it => it.id === id ? {
+    ...it,
+    cantidad_recibida: val
+  } : it));
+  const canConfirm = !!empleado && !saving;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+    title: `Confirmar recepción · ${pedido.sucursal}`,
+    subtitle: `Entregó: ${pedido.entregado_por || '—'}`,
+    onBack: onBack
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-4",
+    style: {
+      color: C.inkMuted
+    }
+  }, "Revisa cada producto por tu cuenta — lo que compras marcó es solo de referencia."), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl border overflow-hidden mb-5",
+    style: {
+      borderColor: C.border,
+      background: C.surface
+    }
+  }, items.map((it, i) => /*#__PURE__*/React.createElement("div", {
+    key: it.id,
+    className: "px-3.5 py-3",
+    style: {
+      borderTop: i > 0 ? `1px solid ${C.border}` : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-start justify-between gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 flex-wrap mb-0.5"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-medium text-sm",
+    style: {
+      color: C.ink
+    }
+  }, it.nombre), it.tipo === 'especial' && /*#__PURE__*/React.createElement(EspecialTag, null)), it.cliente && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-1",
+    style: {
+      color: C.especial
+    }
+  }, "Para: ", it.cliente), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs",
+    style: {
+      color: C.inkMuted
+    }
+  }, "Pedido: ", it.cantidad, " ", it.unidad, " · ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.especial
+    }
+  }, "Compras marcó: ", it.entregado ? `${it.cantidad_entregada} ${it.unidad}` : 'no llegó')), it.nota && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs italic mt-0.5",
+    style: {
+      color: C.inkFaint
+    }
+  }, "Nota de compras: ", it.nota)), /*#__PURE__*/React.createElement(LlegoToggle, {
+    value: it.recibido,
+    onChange: v => setRecibidoItem(it.id, v)
+  })), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    disabled: !it.recibido,
+    value: it.cantidad_recibida,
+    onChange: e => setCantidad(it.id, e.target.value),
+    className: "w-24 text-sm rounded-lg px-2.5 py-1.5 outline-none border disabled:opacity-40",
+    style: {
+      borderColor: C.border,
+      color: C.ink
+    }
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl border p-4 mb-5",
     style: {
       borderColor: C.border,
       background: C.surface
     }
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-xs font-bold uppercase tracking-wide mb-3",
-    style: {
-      color: C.inkFaint
-    }
-  }, "Firmar entrega"), /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] mb-1",
-    style: {
-      color: C.inkMuted
-    }
-  }, "Entregó"), /*#__PURE__*/React.createElement("p", {
-    className: "text-sm font-semibold italic pb-2 mb-3 border-b",
-    style: {
-      color: C.ink,
-      borderColor: C.border
-    }
-  }, role.nombre), /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("label", {
     className: "block text-[11px] mb-1",
     style: {
       color: C.inkMuted
     }
-  }, "Código de quien recibe (lo teclea la persona de la sucursal)"), /*#__PURE__*/React.createElement(CodeField, {
-    value: codigoRecibe,
-    onChange: setCodigoRecibe,
-    placeholder: "Código de quien recibe"
-  }), codigoRecibe.trim().length > 0 && !verificando && (empleadoRecibe ? /*#__PURE__*/React.createElement("p", {
+  }, "Tu código (quien recibe)"), /*#__PURE__*/React.createElement(CodeField, {
+    value: codigo,
+    onChange: setCodigo,
+    placeholder: "Tu código"
+  }), codigo.trim().length > 0 && !verificando && (empleado ? /*#__PURE__*/React.createElement("p", {
     className: "text-xs mt-1.5 font-medium",
     style: {
       color: C.completo
     }
-  }, "✓ ", empleadoRecibe.nombre) : /*#__PURE__*/React.createElement("p", {
+  }, "✓ ", empleado.nombre) : /*#__PURE__*/React.createElement("p", {
     className: "text-xs mt-1.5 font-medium",
     style: {
       color: C.parcial
     }
   }, "Código no reconocido en ", pedido.sucursal, "."))), /*#__PURE__*/React.createElement("button", {
     disabled: !canConfirm,
-    onClick: () => onConfirmar(items, role.nombre, empleadoRecibe.nombre),
+    onClick: () => onConfirmar(items, empleado.nombre),
     className: "w-full py-3 rounded-xl font-semibold text-sm text-white disabled:opacity-40",
     style: {
       background: C.accent
     }
-  }, saving ? 'Guardando…' : 'Confirmar entrega'));
+  }, saving ? 'Guardando…' : 'Confirmar recepción'));
 }
 function VistaHistorial({
   pedidos,
   onOpen
 }) {
   const [filtro, setFiltro] = useState('todas');
-  const historial = useMemo(() => pedidos.filter(p => p.estado !== 'pendiente').filter(p => filtro === 'todas' || p.sucursal === filtro).sort((a, b) => new Date(b.fecha_entrega || b.fecha_creacion) - new Date(a.fecha_entrega || a.fecha_creacion)), [pedidos, filtro]);
+  const historial = useMemo(() => pedidos.filter(p => p.estado === 'entregado' || p.estado === 'cancelado').filter(p => filtro === 'todas' || p.sucursal === filtro).sort((a, b) => new Date(b.fecha_entrega || b.fecha_creacion) - new Date(a.fecha_entrega || a.fecha_creacion)), [pedidos, filtro]);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-1.5 mb-4 overflow-x-auto pb-1"
   }, ['todas', ...SUCURSALES].map(s => /*#__PURE__*/React.createElement("button", {
@@ -2197,16 +2330,29 @@ function App() {
       setError('No se pudo cancelar el pedido.');
     }
   };
-  const confirmarEntrega = async (items, entregadoPor, recibidoPor) => {
+  const guardarSurtido = async (items, entregadoPor) => {
     setSaving(true);
     try {
-      await dbConfirmarEntrega(activeId, items, entregadoPor, recibidoPor);
+      await dbGuardarSurtido(activeId, items, entregadoPor);
       await cargarPedidos(true);
       setComprasTab('cola');
       setScreen('lista');
       setActiveId(null);
     } catch (e) {
-      setError('No se pudo confirmar la entrega.');
+      setError('No se pudo guardar lo surtido.');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const confirmarRecepcion = async (items, recibidoPor) => {
+    setSaving(true);
+    try {
+      await dbConfirmarRecepcion(activeId, items, recibidoPor);
+      await cargarPedidos(true);
+      setScreen('lista');
+      setActiveId(null);
+    } catch (e) {
+      setError('No se pudo confirmar la recepción.');
     } finally {
       setSaving(false);
     }
@@ -2295,6 +2441,14 @@ function App() {
       saving: saving,
       onCancel: () => setScreen('lista'),
       onCreate: crearPedido
+    });else if (screen === 'confirmar' && pedidoActivo) content = /*#__PURE__*/React.createElement(VistaConfirmarRecepcion, {
+      pedido: pedidoActivo,
+      saving: saving,
+      onBack: () => {
+        setScreen('lista');
+        setActiveId(null);
+      },
+      onConfirmar: confirmarRecepcion
     });else if (screen === 'detalle' && pedidoActivo) content = /*#__PURE__*/React.createElement(DetallePedido, {
       pedido: pedidoActivo,
       onBack: () => {
@@ -2309,11 +2463,12 @@ function App() {
       onNuevo: () => setScreen('nuevo'),
       onOpen: id => {
         setActiveId(id);
-        setScreen('detalle');
+        const p = pedidos.find(x => x.id === id);
+        setScreen(p && p.estado === 'por_confirmar' ? 'confirmar' : 'detalle');
       }
     });
   } else {
-    if (screen === 'entrega' && pedidoActivo) content = /*#__PURE__*/React.createElement(VistaEntrega, {
+    if (screen === 'entrega' && pedidoActivo) content = /*#__PURE__*/React.createElement(VistaSurtir, {
       pedido: pedidoActivo,
       role: role,
       saving: saving,
@@ -2321,7 +2476,7 @@ function App() {
         setScreen('lista');
         setActiveId(null);
       },
-      onConfirmar: confirmarEntrega
+      onGuardar: guardarSurtido
     });else if (screen === 'detalle' && pedidoActivo) content = /*#__PURE__*/React.createElement(DetallePedido, {
       pedido: pedidoActivo,
       onBack: () => {
@@ -2332,7 +2487,7 @@ function App() {
       className: "flex items-center justify-between gap-2 mb-5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex gap-1.5"
-    }, [['cola', 'Pendientes'], ['historial', 'Historial']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    }, [['cola', 'Pendientes'], ['por_confirmar', 'Por confirmar'], ['historial', 'Historial']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
       key: key,
       onClick: () => setComprasTab(key),
       className: "px-3.5 py-1.5 rounded-full text-xs font-bold border",
@@ -2356,6 +2511,13 @@ function App() {
       onAbrir: id => {
         setActiveId(id);
         setScreen('entrega');
+      }
+    }) : comprasTab === 'por_confirmar' ? /*#__PURE__*/React.createElement(VistaComprasCola, {
+      pendientes: pedidos.filter(p => p.estado === 'por_confirmar').sort((a, b) => new Date(a.fecha_creacion) - new Date(b.fecha_creacion)),
+      refreshing: refreshing,
+      onAbrir: id => {
+        setActiveId(id);
+        setScreen('detalle');
       }
     }) : /*#__PURE__*/React.createElement(VistaHistorial, {
       pedidos: pedidos,
