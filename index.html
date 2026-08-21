@@ -8,7 +8,9 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
 <style>
   body { margin: 0; background: #F6F4EE; }
 </style>
@@ -471,7 +473,7 @@ function estadoDe(pedido) {
   const completo = pedido.productos.every(p => p.entregado && Number(p.cantidad_entregada) >= Number(p.cantidad));
   return completo ? 'completo' : 'parcial';
 }
-function exportarExcelCompras(pedidos, catalogo) {
+function agregarFilasCompras(pedidos, catalogo) {
   const catMap = new Map(catalogo.map(c => [c.id, c]));
   const pendientes = pedidos.filter(p => p.estado === 'pendiente');
   const filas = new Map();
@@ -492,44 +494,228 @@ function exportarExcelCompras(pedidos, catalogo) {
           unidad: item.unidad,
           total: 0,
           porSucursal: {},
-          clientes: new Set()
+          clientes: new Set(),
+          solicitantes: new Set()
         });
       }
       const fila = filas.get(mapKey);
       fila.total += Number(item.cantidad) || 0;
       fila.porSucursal[p.sucursal] = (fila.porSucursal[p.sucursal] || 0) + (Number(item.cantidad) || 0);
       if (item.cliente) fila.clientes.add(item.cliente);
+      if (p.creado_por) fila.solicitantes.add(p.creado_por);
     }
   }
-  const filasOrdenadas = [...filas.values()].sort((a, b) => a.departamento.localeCompare(b.departamento) || a.producto.localeCompare(b.producto));
-  const aoa = [['Departamento', 'Producto', 'Unidad', 'Total a comprar', ...SUCURSALES, 'Cliente (si es especial)']];
-  for (const f of filasOrdenadas) {
-    aoa.push([f.departamento, f.producto, f.unidad, f.total, ...SUCURSALES.map(s => f.porSucursal[s] || 0), [...f.clientes].join(', ')]);
-  }
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{
-    wch: 24
+  return [...filas.values()].sort((a, b) => a.departamento.localeCompare(b.departamento) || a.producto.localeCompare(b.producto));
+}
+async function exportarExcelCompras(pedidos, catalogo) {
+  const filasOrdenadas = agregarFilasCompras(pedidos, catalogo);
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Lista de compras');
+  const logoId = workbook.addImage({
+    base64: LOGO_SRC,
+    extension: 'png'
+  });
+  sheet.addImage(logoId, {
+    tl: {
+      col: 0,
+      row: 0
+    },
+    ext: {
+      width: 140,
+      height: 40
+    }
+  });
+  sheet.mergeCells('D1:H2');
+  const titleCell = sheet.getCell('D1');
+  titleCell.value = 'Lista de compras';
+  titleCell.font = {
+    size: 16,
+    bold: true,
+    color: {
+      argb: 'FF124F9F'
+    }
+  };
+  titleCell.alignment = {
+    vertical: 'middle'
+  };
+  sheet.getCell('D3').value = `Generado: ${new Date().toLocaleString('es-MX')}`;
+  sheet.getCell('D3').font = {
+    size: 9,
+    italic: true,
+    color: {
+      argb: 'FF767D70'
+    }
+  };
+  const headerRowIndex = 5;
+  const headers = ['Departamento', 'Producto', 'Unidad', 'Total a comprar', ...SUCURSALES, 'Solicitado por', 'Cliente (si es especial)'];
+  const headerRow = sheet.getRow(headerRowIndex);
+  headers.forEach((h, i) => {
+    headerRow.getCell(i + 1).value = h;
+  });
+  headerRow.eachCell(cell => {
+    cell.font = {
+      bold: true,
+      color: {
+        argb: 'FFFFFFFF'
+      }
+    };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: {
+        argb: 'FF124F9F'
+      }
+    };
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: 'center',
+      wrapText: true
+    };
+    cell.border = {
+      top: {
+        style: 'thin'
+      },
+      left: {
+        style: 'thin'
+      },
+      bottom: {
+        style: 'thin'
+      },
+      right: {
+        style: 'thin'
+      }
+    };
+  });
+  headerRow.height = 26;
+  filasOrdenadas.forEach((f, idx) => {
+    const row = sheet.addRow([f.departamento, f.producto, f.unidad, f.total, ...SUCURSALES.map(s => f.porSucursal[s] || 0), [...f.solicitantes].join(', '), [...f.clientes].join(', ')]);
+    row.eachCell(cell => {
+      cell.border = {
+        top: {
+          style: 'thin',
+          color: {
+            argb: 'FFE4E0D3'
+          }
+        },
+        left: {
+          style: 'thin',
+          color: {
+            argb: 'FFE4E0D3'
+          }
+        },
+        bottom: {
+          style: 'thin',
+          color: {
+            argb: 'FFE4E0D3'
+          }
+        },
+        right: {
+          style: 'thin',
+          color: {
+            argb: 'FFE4E0D3'
+          }
+        }
+      };
+      if (idx % 2 === 1) cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: 'FFF6F4EE'
+        }
+      };
+    });
+    row.getCell(4).font = {
+      bold: true,
+      color: {
+        argb: 'FF124F9F'
+      }
+    };
+  });
+  sheet.columns = [{
+    width: 22
   }, {
-    wch: 42
+    width: 40
   }, {
-    wch: 10
+    width: 9
   }, {
-    wch: 14
+    width: 14
   }, {
-    wch: 10
+    width: 11
   }, {
-    wch: 12
+    width: 13
   }, {
-    wch: 12
+    width: 13
   }, {
-    wch: 10
+    width: 10
   }, {
-    wch: 24
+    width: 22
+  }, {
+    width: 24
   }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Lista de compras');
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/octet-stream'
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
   const fecha = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `lista-compras-${fecha}.xlsx`);
+  a.href = url;
+  a.download = `lista-compras-${fecha}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function exportarPDFEntrega(pedido) {
+  const {
+    jsPDF
+  } = window.jspdf;
+  const doc = new jsPDF();
+  doc.addImage(LOGO_SRC, 'PNG', 14, 10, 42, 12);
+  doc.setFontSize(15);
+  doc.setTextColor(18, 79, 159);
+  doc.text('Reporte de recepción', 62, 18);
+  doc.setFontSize(9);
+  doc.setTextColor(118, 125, 112);
+  doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 62, 24);
+  doc.setFontSize(10);
+  doc.setTextColor(30, 36, 31);
+  const info = [[`Sucursal:`, pedido.sucursal], [`Levantó el pedido:`, pedido.creado_por || '—'], [`Fecha del pedido:`, formatFecha(pedido.fecha_creacion)], [`Entregó (compras):`, pedido.entregado_por || '—'], [`Recibió (sucursal):`, pedido.recibido_por || '—'], [`Fecha de entrega:`, formatFecha(pedido.fecha_entrega)]];
+  let y = 36;
+  info.forEach(([label, value]) => {
+    doc.setFont(undefined, 'bold');
+    doc.text(label, 14, y);
+    doc.setFont(undefined, 'normal');
+    doc.text(String(value), 62, y);
+    y += 6;
+  });
+  const rows = pedido.productos.map(p => {
+    const completo = p.recibido && Number(p.cantidad_recibida) >= Number(p.cantidad);
+    return [p.nombre + (p.cliente ? ` (para: ${p.cliente})` : ''), p.unidad, String(p.cantidad), p.recibido ? String(p.cantidad_recibida) : '0', completo ? 'Completo' : 'Diferencia'];
+  });
+  doc.autoTable({
+    startY: y + 4,
+    head: [['Producto', 'Unidad', 'Pedido', 'Recibido', 'Estado']],
+    body: rows,
+    headStyles: {
+      fillColor: [18, 79, 159],
+      textColor: [255, 255, 255]
+    },
+    alternateRowStyles: {
+      fillColor: [246, 244, 238]
+    },
+    styles: {
+      fontSize: 9,
+      cellPadding: 3
+    },
+    columnStyles: {
+      0: {
+        cellWidth: 80
+      }
+    }
+  });
+  const fecha = new Date().toISOString().slice(0, 10);
+  doc.save(`reporte-entrega-${pedido.sucursal.replace(/\s+/g, '-')}-${fecha}.pdf`);
 }
 function hayDiferencia(pedido) {
   if (pedido.estado !== 'entregado') return false;
@@ -1290,7 +1476,13 @@ function AdminPanel({
       color: tab === key ? '#fff' : C.inkMuted
     }
   }, label))), /*#__PURE__*/React.createElement("button", {
-    onClick: () => exportarExcelCompras(pedidos, catalogo),
+    onClick: async () => {
+      try {
+        await exportarExcelCompras(pedidos, catalogo);
+      } catch (e) {
+        setError('No se pudo generar el Excel.');
+      }
+    },
     className: "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border shrink-0",
     style: {
       borderColor: C.gold,
@@ -1781,7 +1973,16 @@ function DetallePedido({
     style: {
       color: C.inkFaint
     }
-  }, "Entregado el ", formatFecha(pedido.fecha_entrega))), pedido.estado === 'pendiente' && onCancelar && /*#__PURE__*/React.createElement("button", {
+  }, "Entregado el ", formatFecha(pedido.fecha_entrega))), entregado && /*#__PURE__*/React.createElement("button", {
+    onClick: () => exportarPDFEntrega(pedido),
+    className: "w-full mb-3 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border text-sm font-bold",
+    style: {
+      borderColor: C.gold,
+      color: C.gold
+    }
+  }, /*#__PURE__*/React.createElement(FileDown, {
+    size: 15
+  }), " Descargar reporte PDF (para inventario)"), pedido.estado === 'pendiente' && onCancelar && /*#__PURE__*/React.createElement("button", {
     onClick: onCancelar,
     className: "w-full py-2.5 rounded-xl border text-sm font-semibold",
     style: {
@@ -2497,7 +2698,13 @@ function App() {
         color: comprasTab === key ? '#fff' : C.inkMuted
       }
     }, label))), /*#__PURE__*/React.createElement("button", {
-      onClick: () => exportarExcelCompras(pedidos, catalogo),
+      onClick: async () => {
+        try {
+          await exportarExcelCompras(pedidos, catalogo);
+        } catch (e) {
+          setError('No se pudo generar el Excel.');
+        }
+      },
       className: "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border shrink-0",
       style: {
         borderColor: C.gold,
