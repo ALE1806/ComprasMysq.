@@ -10,7 +10,6 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
 <style>
   body { margin: 0; background: #F6F4EE; }
 </style>
@@ -671,48 +670,94 @@ function exportarPDFEntrega(pedido) {
     jsPDF
   } = window.jspdf;
   const doc = new jsPDF();
-  doc.addImage(LOGO_SRC, 'PNG', 14, 10, 42, 12);
-  doc.setFontSize(15);
-  doc.setTextColor(18, 79, 159);
-  doc.text('Reporte de recepción', 62, 18);
-  doc.setFontSize(9);
-  doc.setTextColor(118, 125, 112);
-  doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 62, 24);
+  const pageWidth = 210,
+    pageHeight = 297,
+    marginX = 14,
+    marginBottom = 18;
+  const drawHeader = () => {
+    doc.addImage(LOGO_SRC, 'PNG', marginX, 10, 42, 12);
+    doc.setFontSize(15);
+    doc.setTextColor(18, 79, 159);
+    doc.setFont(undefined, 'bold');
+    doc.text('Reporte de recepción', 62, 18);
+    doc.setFontSize(9);
+    doc.setTextColor(118, 125, 112);
+    doc.setFont(undefined, 'normal');
+    doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 62, 24);
+  };
+  drawHeader();
   doc.setFontSize(10);
   doc.setTextColor(30, 36, 31);
-  const info = [[`Sucursal:`, pedido.sucursal], [`Levantó el pedido:`, pedido.creado_por || '—'], [`Fecha del pedido:`, formatFecha(pedido.fecha_creacion)], [`Entregó (compras):`, pedido.entregado_por || '—'], [`Recibió (sucursal):`, pedido.recibido_por || '—'], [`Fecha de entrega:`, formatFecha(pedido.fecha_entrega)]];
+  const info = [['Sucursal:', pedido.sucursal], ['Levantó el pedido:', pedido.creado_por || '—'], ['Fecha del pedido:', formatFecha(pedido.fecha_creacion)], ['Entregó (compras):', pedido.entregado_por || '—'], ['Recibió (sucursal):', pedido.recibido_por || '—'], ['Fecha de entrega:', formatFecha(pedido.fecha_entrega)]];
   let y = 36;
   info.forEach(([label, value]) => {
     doc.setFont(undefined, 'bold');
-    doc.text(label, 14, y);
+    doc.text(label, marginX, y);
     doc.setFont(undefined, 'normal');
     doc.text(String(value), 62, y);
     y += 6;
   });
-  const rows = pedido.productos.map(p => {
+  y += 4;
+  const cols = [{
+    label: 'Producto',
+    x: marginX,
+    w: 80
+  }, {
+    label: 'Unidad',
+    x: marginX + 80,
+    w: 16
+  }, {
+    label: 'Pedido',
+    x: marginX + 96,
+    w: 20
+  }, {
+    label: 'Recibido',
+    x: marginX + 116,
+    w: 22
+  }, {
+    label: 'Estado',
+    x: marginX + 138,
+    w: 44
+  }];
+  const lineH = 4.6;
+  const drawTableHeader = () => {
+    doc.setFillColor(18, 79, 159);
+    doc.rect(marginX, y, pageWidth - marginX * 2, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(9);
+    cols.forEach(c => doc.text(c.label, c.x + 2, y + 5.5));
+    y += 8;
+  };
+  drawTableHeader();
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(9);
+  pedido.productos.forEach((p, idx) => {
     const completo = p.recibido && Number(p.cantidad_recibida) >= Number(p.cantidad);
-    return [p.nombre + (p.cliente ? ` (para: ${p.cliente})` : ''), p.unidad, String(p.cantidad), p.recibido ? String(p.cantidad_recibida) : '0', completo ? 'Completo' : 'Diferencia'];
-  });
-  doc.autoTable({
-    startY: y + 4,
-    head: [['Producto', 'Unidad', 'Pedido', 'Recibido', 'Estado']],
-    body: rows,
-    headStyles: {
-      fillColor: [18, 79, 159],
-      textColor: [255, 255, 255]
-    },
-    alternateRowStyles: {
-      fillColor: [246, 244, 238]
-    },
-    styles: {
-      fontSize: 9,
-      cellPadding: 3
-    },
-    columnStyles: {
-      0: {
-        cellWidth: 80
-      }
+    const nombreTxt = p.nombre + (p.cliente ? ` (para: ${p.cliente})` : '');
+    const nombreLines = doc.splitTextToSize(nombreTxt, cols[0].w - 4);
+    const rowH = Math.max(lineH * nombreLines.length + 3, 8);
+    if (y + rowH > pageHeight - marginBottom) {
+      doc.addPage();
+      y = 20;
+      drawTableHeader();
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
     }
+    if (idx % 2 === 1) {
+      doc.setFillColor(246, 244, 238);
+      doc.rect(marginX, y, pageWidth - marginX * 2, rowH, 'F');
+    }
+    doc.setTextColor(30, 36, 31);
+    doc.text(nombreLines, cols[0].x + 2, y + lineH);
+    doc.text(String(p.unidad), cols[1].x + 2, y + lineH);
+    doc.text(String(p.cantidad), cols[2].x + 2, y + lineH);
+    doc.text(p.recibido ? String(p.cantidad_recibida) : '0', cols[3].x + 2, y + lineH);
+    doc.setTextColor(...(completo ? [31, 138, 95] : [190, 75, 34]));
+    doc.setFont(undefined, 'bold');
+    doc.text(completo ? 'Completo' : 'Diferencia', cols[4].x + 2, y + lineH);
+    doc.setFont(undefined, 'normal');
+    y += rowH;
   });
   const fecha = new Date().toISOString().slice(0, 10);
   doc.save(`reporte-entrega-${pedido.sucursal.replace(/\s+/g, '-')}-${fecha}.pdf`);
@@ -1397,6 +1442,7 @@ function AdminPanel({
   const [loadingEmp, setLoadingEmp] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pedidoAbierto, setPedidoAbierto] = useState(null);
   const cargarEmpleados = useCallback(async () => {
     try {
       setEmpleados(await listarEmpleadosAdmin(adminCodigo));
@@ -1452,9 +1498,21 @@ function AdminPanel({
       setSaving(false);
     }
   };
+  const pedidoActivo = pedidos.find(p => p.id === pedidoAbierto);
+  if (tab === 'pedidos' && pedidoActivo) {
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
+      title: "Administración",
+      subtitle: "Detalle de pedido",
+      onBack: () => setPedidoAbierto(null)
+    }), /*#__PURE__*/React.createElement(DetallePedido, {
+      pedido: pedidoActivo,
+      onBack: () => setPedidoAbierto(null),
+      puedeDescargarPDF: true
+    }));
+  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
     title: "Administración",
-    subtitle: "Empleados y catálogo",
+    subtitle: "Empleados, catálogo y pedidos",
     onBack: onBack
   }), error && /*#__PURE__*/React.createElement("div", {
     className: "mb-3 px-3 py-2 rounded-lg text-xs font-medium",
@@ -1463,10 +1521,10 @@ function AdminPanel({
       color: C.parcial
     }
   }, error), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2 mb-5"
+    className: "flex items-center justify-between gap-2 mb-5 flex-wrap"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-1.5"
-  }, [['empleados', 'Empleados'], ['catalogo', 'Catálogo']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+  }, [['empleados', 'Empleados'], ['catalogo', 'Catálogo'], ['pedidos', 'Pedidos']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
     key: key,
     onClick: () => setTab(key),
     className: "px-3.5 py-1.5 rounded-full text-xs font-bold border",
@@ -1496,11 +1554,14 @@ function AdminPanel({
     onAdd: handleAddEmpleado,
     onDelete: handleDeleteEmpleado,
     saving: saving
-  }) : /*#__PURE__*/React.createElement(CatalogoAdmin, {
+  }) : tab === 'catalogo' ? /*#__PURE__*/React.createElement(CatalogoAdmin, {
     catalogo: catalogo,
     onAdd: handleAddProducto,
     onDelete: handleDeleteProducto,
     saving: saving
+  }) : /*#__PURE__*/React.createElement(VistaHistorial, {
+    pedidos: pedidos,
+    onOpen: id => setPedidoAbierto(id)
   }));
 }
 function CatalogoBrowse({
@@ -1857,7 +1918,8 @@ function NuevoPedido({
 function DetallePedido({
   pedido,
   onBack,
-  onCancelar
+  onCancelar,
+  puedeDescargarPDF
 }) {
   const estado = estadoDe(pedido);
   const entregado = pedido.estado === 'entregado';
@@ -1973,7 +2035,7 @@ function DetallePedido({
     style: {
       color: C.inkFaint
     }
-  }, "Entregado el ", formatFecha(pedido.fecha_entrega))), entregado && /*#__PURE__*/React.createElement("button", {
+  }, "Entregado el ", formatFecha(pedido.fecha_entrega))), entregado && puedeDescargarPDF && /*#__PURE__*/React.createElement("button", {
     onClick: () => exportarPDFEntrega(pedido),
     className: "w-full mb-3 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border text-sm font-bold",
     style: {
@@ -2589,6 +2651,7 @@ function App() {
         setRole({
           type: preRole.type,
           nombre: emp.nombre,
+          area: emp.area,
           sucursal: preRole.type === 'sucursal' ? preRole.nombre : undefined,
           empleadoId: emp.empleado_id
         });
@@ -2656,7 +2719,8 @@ function App() {
         setScreen('lista');
         setActiveId(null);
       },
-      onCancelar: pedidoActivo.estado === 'pendiente' ? () => cancelarPedido(pedidoActivo.id) : null
+      onCancelar: pedidoActivo.estado === 'pendiente' ? () => cancelarPedido(pedidoActivo.id) : null,
+      puedeDescargarPDF: role.area === 'todas'
     });else content = /*#__PURE__*/React.createElement(VistaSucursal, {
       sucursal: role.sucursal,
       pedidos: pedidos,
@@ -2683,7 +2747,8 @@ function App() {
       onBack: () => {
         setScreen('lista');
         setActiveId(null);
-      }
+      },
+      puedeDescargarPDF: role.area === 'todas'
     });else content = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center justify-between gap-2 mb-5"
     }, /*#__PURE__*/React.createElement("div", {
