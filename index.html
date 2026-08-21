@@ -107,23 +107,30 @@ async function bajaProducto(adminCodigo, id) {
   });
   if (error) throw error;
 }
+async function fetchTodasLasPaginas(queryBuilder) {
+  const pageSize = 1000;
+  let todo = [];
+  let desde = 0;
+  while (true) {
+    const {
+      data,
+      error
+    } = await queryBuilder().range(desde, desde + pageSize - 1);
+    if (error) throw error;
+    todo = todo.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    desde += pageSize;
+  }
+  return todo;
+}
 async function obtenerCatalogo() {
-  const {
-    data,
-    error
-  } = await db.from('catalogo_productos').select('*').order('nombre');
-  if (error) throw error;
-  return data || [];
+  return fetchTodasLasPaginas(() => db.from('catalogo_productos').select('*').order('nombre'));
 }
 async function obtenerPedidos() {
-  const {
-    data,
-    error
-  } = await db.from('pedidos').select('*, pedido_productos(*)').order('fecha_creacion', {
+  const data = await fetchTodasLasPaginas(() => db.from('pedidos').select('*, pedido_productos(*)').order('fecha_creacion', {
     ascending: false
-  });
-  if (error) throw error;
-  return (data || []).map(p => ({
+  }));
+  return data.map(p => ({
     ...p,
     productos: p.pedido_productos || []
   }));
