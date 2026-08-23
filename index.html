@@ -185,7 +185,8 @@ async function dbConfirmarRecepcion(pedidoId, items, recibidoPor) {
       error
     } = await db.from('pedido_productos').update({
       recibido: it.recibido,
-      cantidad_recibida: it.cantidad_recibida
+      cantidad_recibida: it.cantidad_recibida,
+      nota_recepcion: it.nota_recepcion || null
     }).eq('id', it.id);
     if (error) throw error;
   }
@@ -425,6 +426,28 @@ const FileDown = p => /*#__PURE__*/React.createElement(Ic, p, /*#__PURE__*/React
 
 // ---------- Constantes y estilos ----------
 const SUCURSALES = ['Condesa', 'Independencia', 'Justo Sierra', 'Santa Cruz'];
+const COLOR_SUCURSAL = {
+  'Santa Cruz': {
+    bg: 'FF1D4ED8',
+    texto: 'FFFFFFFF'
+  },
+  'Condesa': {
+    bg: 'FFDC2626',
+    texto: 'FFFFFFFF'
+  },
+  'Independencia': {
+    bg: 'FF16A34A',
+    texto: 'FFFFFFFF'
+  },
+  'Justo Sierra': {
+    bg: 'FFF5C518',
+    texto: 'FF1E241F'
+  }
+};
+const ORIGENES_SEPARADOS = new Set(['USA', 'SAMS', "SAM'S", 'SAM´S', 'EXTERNOS', 'EXTERNO']);
+function esOrigenEspecial(departamento) {
+  return ORIGENES_SEPARADOS.has(normalizar(departamento || '').toUpperCase());
+}
 function normalizar(str) {
   return (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
@@ -506,14 +529,7 @@ function agregarFilasCompras(pedidos, catalogo) {
   }
   return [...filas.values()].sort((a, b) => a.departamento.localeCompare(b.departamento) || a.producto.localeCompare(b.producto));
 }
-async function exportarExcelCompras(pedidos, catalogo) {
-  const filasOrdenadas = agregarFilasCompras(pedidos, catalogo);
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Lista de compras');
-  const logoId = workbook.addImage({
-    base64: LOGO_SRC,
-    extension: 'png'
-  });
+function construirHojaCompras(sheet, filas, logoId, titulo) {
   sheet.addImage(logoId, {
     tl: {
       col: 0,
@@ -526,7 +542,7 @@ async function exportarExcelCompras(pedidos, catalogo) {
   });
   sheet.mergeCells('D1:H2');
   const titleCell = sheet.getCell('D1');
-  titleCell.value = 'Lista de compras';
+  titleCell.value = titulo;
   titleCell.font = {
     size: 16,
     bold: true,
@@ -586,7 +602,25 @@ async function exportarExcelCompras(pedidos, catalogo) {
     };
   });
   headerRow.height = 26;
-  filasOrdenadas.forEach((f, idx) => {
+  SUCURSALES.forEach(s => {
+    const colIdx = headers.indexOf(s) + 1;
+    const cell = headerRow.getCell(colIdx);
+    const c = COLOR_SUCURSAL[s];
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: {
+        argb: c.bg
+      }
+    };
+    cell.font = {
+      bold: true,
+      color: {
+        argb: c.texto
+      }
+    };
+  });
+  filas.forEach((f, idx) => {
     const row = sheet.addRow([f.departamento, f.producto, f.unidad, f.total, ...SUCURSALES.map(s => f.porSucursal[s] || 0), [...f.solicitantes].join(', '), [...f.clientes].join(', ')]);
     row.eachCell(cell => {
       cell.border = {
@@ -651,6 +685,20 @@ async function exportarExcelCompras(pedidos, catalogo) {
   }, {
     width: 24
   }];
+}
+async function exportarExcelCompras(pedidos, catalogo) {
+  const todasLasFilas = agregarFilasCompras(pedidos, catalogo);
+  const filasPrincipal = todasLasFilas.filter(f => !esOrigenEspecial(f.departamento));
+  const filasEspeciales = todasLasFilas.filter(f => esOrigenEspecial(f.departamento));
+  const workbook = new ExcelJS.Workbook();
+  const logoId = workbook.addImage({
+    base64: LOGO_SRC,
+    extension: 'png'
+  });
+  construirHojaCompras(workbook.addWorksheet('Lista de compras'), filasPrincipal, logoId, 'Lista de compras');
+  if (filasEspeciales.length > 0) {
+    construirHojaCompras(workbook.addWorksheet("Sam's, Externos y USA"), filasEspeciales, logoId, "Sam's, Externos y USA");
+  }
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
     type: 'application/octet-stream'
@@ -736,7 +784,18 @@ function exportarPDFEntrega(pedido) {
     const completo = p.recibido && Number(p.cantidad_recibida) >= Number(p.cantidad);
     const nombreTxt = p.nombre + (p.cliente ? ` (para: ${p.cliente})` : '');
     const nombreLines = doc.splitTextToSize(nombreTxt, cols[0].w - 4);
-    const rowH = Math.max(lineH * nombreLines.length + 3, 8);
+    const notas = [];
+    if (p.nota) notas.push({
+      texto: `Nota compras: ${p.nota}`,
+      quien: 'Compras'
+    });
+    if (p.nota_recepcion) notas.push({
+      texto: `Nota sucursal: ${p.nota_recepcion}`,
+      quien: 'Sucursal'
+    });
+    const notaLineasPorNota = notas.map(n => doc.splitTextToSize(n.texto, cols[0].w - 4));
+    const totalNotaLineas = notaLineasPorNota.reduce((sum, lns) => sum + lns.length, 0);
+    const rowH = Math.max(lineH * (nombreLines.length + totalNotaLineas) + 3, 8);
     if (y + rowH > pageHeight - marginBottom) {
       doc.addPage();
       y = 20;
@@ -750,6 +809,17 @@ function exportarPDFEntrega(pedido) {
     }
     doc.setTextColor(30, 36, 31);
     doc.text(nombreLines, cols[0].x + 2, y + lineH);
+    let notaY = y + lineH + lineH * nombreLines.length;
+    doc.setFontSize(8);
+    doc.setFont(undefined, 'italic');
+    doc.setTextColor(118, 125, 112);
+    notaLineasPorNota.forEach(lns => {
+      doc.text(lns, cols[0].x + 2, notaY);
+      notaY += lineH * lns.length;
+    });
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(30, 36, 31);
     doc.text(String(p.unidad), cols[1].x + 2, y + lineH);
     doc.text(String(p.cantidad), cols[2].x + 2, y + lineH);
     doc.text(p.recibido ? String(p.cantidad_recibida) : '0', cols[3].x + 2, y + lineH);
@@ -1990,7 +2060,12 @@ function DetallePedido({
       style: {
         color: C.inkFaint
       }
-    }, "Nota de compras: ", p.nota));
+    }, "Nota de compras: ", p.nota), p.nota_recepcion && /*#__PURE__*/React.createElement("p", {
+      className: "text-xs italic mt-0.5",
+      style: {
+        color: C.inkFaint
+      }
+    }, "Nota de sucursal: ", p.nota_recepcion));
   })), (porConfirmar || entregado) && /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl border p-4 mb-4",
     style: {
@@ -2308,7 +2383,8 @@ function VistaConfirmarRecepcion({
   const [items, setItems] = useState(() => pedido.productos.map(p => ({
     ...p,
     recibido: p.entregado ?? true,
-    cantidad_recibida: p.cantidad_entregada ?? p.cantidad
+    cantidad_recibida: p.cantidad_entregada ?? p.cantidad,
+    nota_recepcion: p.nota_recepcion ?? ''
   })));
   const [codigo, setCodigo] = useState('');
   const [empleado, setEmpleado] = useState(null);
@@ -2338,6 +2414,10 @@ function VistaConfirmarRecepcion({
   const setCantidad = (id, val) => setItems(its => its.map(it => it.id === id ? {
     ...it,
     cantidad_recibida: val
+  } : it));
+  const setNotaRecepcion = (id, val) => setItems(its => its.map(it => it.id === id ? {
+    ...it,
+    nota_recepcion: val
   } : it));
   const canConfirm = !!empleado && !saving;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(TopBar, {
@@ -2394,7 +2474,9 @@ function VistaConfirmarRecepcion({
   }, "Nota de compras: ", it.nota)), /*#__PURE__*/React.createElement(LlegoToggle, {
     value: it.recibido,
     onChange: v => setRecibidoItem(it.id, v)
-  })), /*#__PURE__*/React.createElement("input", {
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: "0",
     disabled: !it.recibido,
@@ -2405,7 +2487,16 @@ function VistaConfirmarRecepcion({
       borderColor: C.border,
       color: C.ink
     }
-  })))), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Nota (opcional)",
+    value: it.nota_recepcion,
+    onChange: e => setNotaRecepcion(it.id, e.target.value),
+    className: "flex-1 text-sm rounded-lg px-2.5 py-1.5 outline-none border",
+    style: {
+      borderColor: C.border,
+      color: C.ink
+    }
+  }))))), /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl border p-4 mb-5",
     style: {
       borderColor: C.border,
