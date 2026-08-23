@@ -530,6 +530,11 @@ function agregarFilasCompras(pedidos, catalogo) {
   return [...filas.values()].sort((a, b) => a.departamento.localeCompare(b.departamento) || a.producto.localeCompare(b.producto));
 }
 function construirHojaCompras(sheet, filas, logoId, titulo) {
+  sheet.views = [{
+    state: 'frozen',
+    xSplit: 2,
+    ySplit: 5
+  }];
   sheet.addImage(logoId, {
     tl: {
       col: 0,
@@ -563,6 +568,7 @@ function construirHojaCompras(sheet, filas, logoId, titulo) {
   };
   const headerRowIndex = 5;
   const headers = ['Departamento', 'Producto', 'Unidad', 'Total a comprar', ...SUCURSALES, 'Solicitado por', 'Cliente (si es especial)'];
+  const totalColIdx = headers.indexOf('Total a comprar') + 1;
   const headerRow = sheet.getRow(headerRowIndex);
   headers.forEach((h, i) => {
     headerRow.getCell(i + 1).value = h;
@@ -620,9 +626,23 @@ function construirHojaCompras(sheet, filas, logoId, titulo) {
       }
     };
   });
+  const totalHeaderCell = headerRow.getCell(totalColIdx);
+  totalHeaderCell.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: {
+      argb: 'FFFFD400'
+    }
+  };
+  totalHeaderCell.font = {
+    bold: true,
+    color: {
+      argb: 'FF1E241F'
+    }
+  };
   filas.forEach((f, idx) => {
     const row = sheet.addRow([f.departamento, f.producto, f.unidad, f.total, ...SUCURSALES.map(s => f.porSucursal[s] || 0), [...f.solicitantes].join(', '), [...f.clientes].join(', ')]);
-    row.eachCell(cell => {
+    row.eachCell((cell, colNumber) => {
       cell.border = {
         top: {
           style: 'thin',
@@ -649,20 +669,30 @@ function construirHojaCompras(sheet, filas, logoId, titulo) {
           }
         }
       };
-      if (idx % 2 === 1) cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: {
-          argb: 'FFF6F4EE'
-        }
-      };
-    });
-    row.getCell(4).font = {
-      bold: true,
-      color: {
-        argb: 'FF124F9F'
+      if (colNumber === totalColIdx) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: {
+            argb: 'FFFFD400'
+          }
+        };
+        cell.font = {
+          bold: true,
+          color: {
+            argb: 'FF1E241F'
+          }
+        };
+      } else if (idx % 2 === 1) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: {
+            argb: 'FFF6F4EE'
+          }
+        };
       }
-    };
+    });
   });
   sheet.columns = [{
     width: 22
