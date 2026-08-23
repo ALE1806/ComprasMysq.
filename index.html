@@ -444,9 +444,12 @@ const COLOR_SUCURSAL = {
     texto: 'FF1E241F'
   }
 };
-const ORIGENES_SEPARADOS = new Set(['USA', 'SAMS', "SAM'S", 'SAM´S', 'EXTERNOS', 'EXTERNO']);
-function esOrigenEspecial(departamento) {
-  return ORIGENES_SEPARADOS.has(normalizar(departamento || '').toUpperCase());
+function origenCanonico(departamento) {
+  const d = normalizar(departamento || '').toUpperCase();
+  if (d === 'USA') return 'USA';
+  if (d === 'SAMS' || d === "SAM'S" || d === 'SAM´S') return "Sam's";
+  if (d === 'EXTERNOS' || d === 'EXTERNO') return 'Externos';
+  return null;
 }
 function normalizar(str) {
   return (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -718,17 +721,28 @@ function construirHojaCompras(sheet, filas, logoId, titulo) {
 }
 async function exportarExcelCompras(pedidos, catalogo) {
   const todasLasFilas = agregarFilasCompras(pedidos, catalogo);
-  const filasPrincipal = todasLasFilas.filter(f => !esOrigenEspecial(f.departamento));
-  const filasEspeciales = todasLasFilas.filter(f => esOrigenEspecial(f.departamento));
+  const filasPrincipal = [];
+  const gruposEspeciales = new Map();
+  todasLasFilas.forEach(f => {
+    const origen = origenCanonico(f.departamento);
+    if (origen) {
+      if (!gruposEspeciales.has(origen)) gruposEspeciales.set(origen, []);
+      gruposEspeciales.get(origen).push(f);
+    } else {
+      filasPrincipal.push(f);
+    }
+  });
   const workbook = new ExcelJS.Workbook();
   const logoId = workbook.addImage({
     base64: LOGO_SRC,
     extension: 'png'
   });
-  construirHojaCompras(workbook.addWorksheet('Lista de compras'), filasPrincipal, logoId, 'Lista de compras');
-  if (filasEspeciales.length > 0) {
-    construirHojaCompras(workbook.addWorksheet("Sam's, Externos y USA"), filasEspeciales, logoId, "Sam's, Externos y USA");
-  }
+  construirHojaCompras(workbook.addWorksheet('Lista de compras'), filasPrincipal, logoId, 'Lista de compras — Costco');
+  ['USA', "Sam's", 'Externos'].forEach(nombreOrigen => {
+    if (gruposEspeciales.has(nombreOrigen)) {
+      construirHojaCompras(workbook.addWorksheet(nombreOrigen), gruposEspeciales.get(nombreOrigen), logoId, nombreOrigen);
+    }
+  });
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
     type: 'application/octet-stream'
